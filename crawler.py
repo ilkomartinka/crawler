@@ -4,6 +4,7 @@ import json
 import time
 from urllib.parse import urljoin, urlparse
 
+
 # Start directly in the news section
 START_URL = "https://www.idnes.cz/zpravy"
 DOMAIN = "idnes.cz"
