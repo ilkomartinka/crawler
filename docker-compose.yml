@@ -1,0 +1,58 @@
+
+services:
+  app:
+    build:
+      context: .
+    restart: unless-stopped
+    environment:
+      RABBITMQ_URL: amqp://${RABBITMQ_USER:-crawler}:${RABBITMQ_PASSWORD:-crawler}@rabbitmq:5672/%2F
+      RABBITMQ_QUEUE: ${RABBITMQ_QUEUE:-crawler}
+      OUTPUT_FILE: /output/articles.jsonl
+      VISITED_DB: /data/visited.sqlite3
+      POSTGRES_DSN: postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@postgres:5432/${POSTGRES_DB:-crawler}
+      ALLOWED_DOMAIN: ${ALLOWED_DOMAIN:-idnes.cz}
+    volumes:
+      - crawler-data:/data
+      - .:/output
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+
+  rabbitmq:
+    image: rabbitmq:4.1-management-alpine
+    restart: unless-stopped
+    command: sh -c "chown -R rabbitmq:rabbitmq /var/lib/rabbitmq || true; rabbitmq-server"
+    environment:
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER:-crawler}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD:-crawler}
+    volumes:
+      - rabbitmq-data:/var/lib/rabbitmq
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    ports:
+      - "127.0.0.1:15672:15672"
+  postgres:
+    image: postgres:15-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+      POSTGRES_DB: ${POSTGRES_DB:-crawler}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-crawler} -h localhost"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    ports:
+      - "127.0.0.1:5432:5432"
+volumes:
+  rabbitmq-data:
+  crawler-data:
+  postgres-data:

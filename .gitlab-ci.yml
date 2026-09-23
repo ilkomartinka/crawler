@@ -1,0 +1,63 @@
+stages:
+  - build
+  - deploy
+
+build-image:
+  stage: build
+  image: docker:27-cli
+  services:
+    - name: docker:27-dind
+  variables:
+    DOCKER_HOST: tcp://docker:2375
+    DOCKER_TLS_CERTDIR: ""
+  script:
+    - docker compose config --quiet
+    - export CRAWLER_IMAGE="ghcr.io/ilkomartinka/crawler:latest"
+    - docker compose -f docker-compose.prod.yml config --quiet
+    - docker build --pull --tag "$CRAWLER_IMAGE" .
+    - printf '%s' "$GHCR_TOKEN" | docker login "ghcr.io" -u "$GHCR_USER" --password-stdin
+    - docker push "$CRAWLER_IMAGE"
+    - cp docker-compose.prod.yml deployment.yml
+  artifacts:
+    paths:
+      - deployment.yml
+
+deploy:
+  stage: deploy
+  image: alpine:3.22
+  resource_group: production
+  environment:
+    name: production
+  rules:
+    - if: '$CI_COMMIT_MESSAGE =~ /^prod/'
+  before_script:
+    - apk add --no-cache openssh-client
+    - test -n "$SSH_PRIVATE_KEY"
+    - install -d -m 700 ~/.ssh
+    - |
+      if [ -f "$SSH_PRIVATE_KEY" ]; then
+        cp "$SSH_PRIVATE_KEY" ~/.ssh/id_ed25519
+      else
+        printf '%s\n' "$SSH_PRIVATE_KEY" | tr -d '\r' > ~/.ssh/id_ed25519
+      fi
+    - chmod 600 ~/.ssh/id_ed25519
+    - ssh-keyscan -p "$VPS_PORT" -H "$VPS_HOST" > ~/.ssh/known_hosts
+    - chmod 600 ~/.ssh/known_hosts
+  script:
+    - ssh -p "$VPS_PORT" "$VPS_USER@$VPS_HOST" "mkdir -p '$VPS_PATH'"
+    - scp -P "$VPS_PORT" deployment.yml "$VPS_USER@$VPS_HOST:$VPS_PATH/docker-compose.yml"
+    - |
+      printf '%s' "$GHCR_TOKEN" | ssh -p "$VPS_PORT" "$VPS_USER@$VPS_HOST" "
+        set -eu
+        cd '$VPS_PATH'
+        export DOCKER_CONFIG=\$(mktemp -d)
+        trap 'rm -rf \"\$DOCKER_CONFIG\"' EXIT
+        docker login 'ghcr.io' -u '$GHCR_USER' --password-stdin
+        docker compose pull
+        docker compose up -d --scale app=20 --remove-orphans --wait
+      "
+  variables:
+    VPS_HOST: dev.spsejecna.net
+    VPS_PORT: "20079"
+    VPS_USER: jouda
+    VPS_PATH: /home/jouda/crawler
